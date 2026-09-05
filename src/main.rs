@@ -224,7 +224,7 @@ fn run_provider_cli(name: &str, command: ProviderGroup) -> Result<()> {
 
 fn print_models(registry: &Registry, full: bool) {
     let grouped = registry.grouped_models();
-    for provider in ["codex", "kimi", "grok", "opencode", "cursor"] {
+    for provider in ["anthropic", "codex", "kimi", "grok", "opencode", "cursor"] {
         let Some(models) = grouped.get(provider) else {
             continue;
         };
@@ -275,7 +275,10 @@ fn print_server_banner(bind_address: &str, port: u16, registry: &Registry) {
     }
     print_models(registry, false);
     println!();
-    println!("Configure Claude Code (pick a model from above):");
+    println!(
+        "Claude models use Claude Code's own Anthropic authentication (no placeholder token)."
+    );
+    println!("Configure Claude Code for Codex (example):");
     println!("  export ANTHROPIC_BASE_URL=\"http://localhost:{port}\"");
     println!("  export ANTHROPIC_AUTH_TOKEN=\"anything\"");
     println!("  export ANTHROPIC_MODEL=\"gpt-5.6-sol\"");

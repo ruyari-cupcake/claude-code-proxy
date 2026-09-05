@@ -691,11 +691,14 @@ mod tests {
 
     #[test]
     fn native_request_resolves_alias_and_fast_tier() {
-        let mut body = request(json!({"model":"claude-opus-5","input":[]}));
+        let mut body = request(json!({"model":"haiku","input":[]}));
         let resolved = shape_native_request(&mut body).unwrap();
-        assert_eq!(resolved.model, "gpt-5.6-sol");
-        assert_eq!(body["model"], "gpt-5.6-sol");
+        assert_eq!(resolved.model, "gpt-5.6-luna");
+        assert_eq!(body["model"], "gpt-5.6-luna");
         assert!(resolved.use_responses_lite);
+
+        let mut claude = request(json!({"model":"claude-opus-5","input":[]}));
+        assert!(shape_native_request(&mut claude).is_err());
 
         let mut fast = request(json!({"model":"gpt-5.4-fast","input":[]}));
         let resolved = shape_native_request(&mut fast).unwrap();

@@ -79,6 +79,16 @@ impl Provider for FakeProvider {
         (StatusCode::NOT_IMPLEMENTED, "unused").into_response()
     }
 
+    async fn handle_passthrough(
+        &self,
+        request: claude_code_proxy::provider::PassthroughRequest,
+    ) -> axum::response::Response {
+        assert_eq!(self.name, "anthropic");
+        assert_eq!(request.path_and_query, "/v1/messages/count_tokens");
+        assert!(String::from_utf8_lossy(&request.raw_body).contains("claude-opus-5"));
+        (StatusCode::OK, "anthropic").into_response()
+    }
+
     async fn generate_anthropic_stream(
         &self,
         body: MessagesRequest,
@@ -682,7 +692,13 @@ async fn context_window_hint_is_removed_before_provider_dispatch() {
 
 #[tokio::test]
 async fn opus_5_alias_routes_to_provider() {
-    let app = app(Arc::new(Registry::with_default_alias()));
+    let app = app(Arc::new(Registry::from_providers(
+        AliasProvider::Kimi,
+        [Arc::new(FakeProvider {
+            name: "anthropic",
+            models: vec!["claude-opus-5".into()],
+        }) as Arc<dyn Provider>],
+    )));
     let response = app
         .oneshot(
             Request::builder()
@@ -1069,11 +1085,6 @@ async fn openai_routes_select_non_codex_providers_and_aliases() {
             "/v1/chat/completions",
             json!({"model":"cursor:gpt-5.5","messages":[{"role":"user","content":"hello"}]}),
             "cursor",
-        ),
-        (
-            "/v1/responses",
-            json!({"model":"sonnet","input":"hello"}),
-            "kimi",
         ),
     ] {
         let response = app_with_options(routed_registry(), None, true)
@@ -1472,4 +1483,45 @@ async fn models_endpoint_tolerates_unknown_query_params() {
     let app = app(Arc::new(Registry::with_default_alias()));
     let (status, _) = get_models(app, "/v1/models?limit=1000&after_id=x").await;
     assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn openai_claude_alias_never_falls_back_to_kimi() {
+    let response = app_with_options(routed_registry(), None, true)
+        .oneshot(
+            Request::post("/v1/responses")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"model":"sonnet","input":"hello"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn suffixed_haiku_ingress_uses_codex_not_raw_transport() {
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let provider = Arc::new(IdentityCaptureProvider { captured }) as Arc<dyn Provider>;
+    let router = app(Arc::new(Registry::from_providers(
+        AliasProvider::Kimi,
+        [provider],
+    )));
+    for model in [
+        "haiku[1m]",
+        "claude-haiku-4-5[1m]",
+        "claude-haiku-4-5-20251001[1m]",
+        "gpt-5.5[1m]",
+    ] {
+        for path in ["/v1/messages", "/v1/messages/count_tokens"] {
+            assert_eq!(
+                call_identity_ingress(&router, path, &[], json!({"model":model,"messages":[]}))
+                    .await,
+                StatusCode::OK,
+                "{model} {path}"
+            );
+        }
+    }
 }

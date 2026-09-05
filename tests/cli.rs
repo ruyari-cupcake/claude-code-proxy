@@ -23,6 +23,14 @@ fn models_prints_all_providers() -> Result<(), Box<dyn std::error::Error>> {
     cmd.arg("models");
     let out = String::from_utf8(cmd.output()?.stdout)?;
     assert!(out.contains("codex:"));
+    let anthropic = out
+        .lines()
+        .find(|line| line.starts_with("anthropic:"))
+        .expect("Anthropic must be discoverable in CLI model output");
+    assert!(anthropic.contains("claude-fable-5-1"));
+    let codex = out.lines().find(|line| line.starts_with("codex:")).unwrap();
+    assert!(codex.contains("gpt-6-astra"));
+    assert!(!codex.contains("fable"));
     assert!(out.contains("kimi:"));
     assert!(out.contains("opencode:"));
     assert!(out.contains("cursor:"));

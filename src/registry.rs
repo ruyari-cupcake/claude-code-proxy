@@ -10,9 +10,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 pub const ANTHROPIC_STYLE_ALIASES: &[&str] = &[
-    "haiku",
-    "claude-haiku-4-5",
-    "claude-haiku-4-5-20251001",
+    "mythos",
     "sonnet",
     "claude-sonnet-4-6",
     "claude-sonnet-5",
@@ -55,15 +53,21 @@ pub(crate) const KIMI_MODELS: &[&str] = &["kimi-for-coding", "kimi-k2.6", "kimi-
 pub(crate) const GROK_MODELS: &[&str] = &["grok-composer-2.5-fast", "grok-4.5", "grok-4.6"];
 
 pub struct Registry {
-    alias_provider: AliasProvider,
     models: BTreeMap<String, Vec<String>>,
     handlers: BTreeMap<String, Arc<dyn Provider>>,
 }
 
 impl Registry {
-    pub fn new(alias_provider: AliasProvider) -> Self {
+    pub fn new(_alias_provider: AliasProvider) -> Self {
         let mut models: BTreeMap<String, Vec<String>> = BTreeMap::new();
         models.insert("codex".into(), expand_codex_models());
+        models.insert(
+            "anthropic".into(),
+            ANTHROPIC_STYLE_ALIASES
+                .iter()
+                .map(|m| (*m).to_string())
+                .collect(),
+        );
         models.insert(
             "kimi".into(),
             KIMI_MODELS.iter().map(|m| (*m).to_string()).collect(),
@@ -84,6 +88,9 @@ impl Registry {
         let mut handlers = BTreeMap::new();
         for (name, entries) in &models {
             let handler: Arc<dyn Provider> = match name.as_str() {
+                "anthropic" => {
+                    Arc::new(crate::providers::anthropic::AnthropicProvider::production())
+                }
                 "codex" => Arc::new(crate::providers::codex::CodexProvider::new()),
                 "kimi" => Arc::new(crate::providers::kimi::KimiProvider::new()),
                 "cursor" => Arc::new(crate::providers::cursor::CursorProvider::new()),
@@ -94,11 +101,7 @@ impl Registry {
             handlers.insert(name.clone(), handler);
         }
 
-        Self {
-            alias_provider,
-            models,
-            handlers,
-        }
+        Self { models, handlers }
     }
 
     pub fn with_default_alias() -> Self {
@@ -106,7 +109,7 @@ impl Registry {
     }
 
     pub fn from_providers(
-        alias_provider: AliasProvider,
+        _alias_provider: AliasProvider,
         providers: impl IntoIterator<Item = Arc<dyn Provider>>,
     ) -> Self {
         let mut models = BTreeMap::new();
@@ -116,11 +119,7 @@ impl Registry {
             models.insert(name.clone(), provider.supported_models());
             handlers.insert(name, provider);
         }
-        Self {
-            alias_provider,
-            models,
-            handlers,
-        }
+        Self { models, handlers }
     }
 
     pub fn list_provider_names(&self) -> Vec<String> {
@@ -135,8 +134,8 @@ impl Registry {
 
     pub fn supported_models_for(&self, provider: &str) -> Vec<String> {
         let mut models = self.models.get(provider).cloned().unwrap_or_default();
-        if provider == self.alias_provider.as_str() {
-            for alias in ANTHROPIC_STYLE_ALIASES {
+        if provider == "codex" {
+            for alias in HAIKU_COMPATIBILITY_IDS {
                 if !models.iter().any(|value| value == alias) {
                     models.push((*alias).to_string());
                 }
@@ -167,12 +166,16 @@ impl Registry {
     pub fn provider_for_model(
         &self,
         raw_model: &str,
-        session_affinity: Option<&AliasProvider>,
+        _session_affinity: Option<&AliasProvider>,
     ) -> Option<Arc<dyn Provider>> {
         let normalized = normalize_incoming_model(raw_model);
-        if is_anthropic_alias(&normalized) {
-            let target = session_affinity.unwrap_or(&self.alias_provider);
-            return self.handlers.get(target.as_str()).cloned();
+        // Routing ignores the client context-window hint; raw passthrough bytes do not.
+        // Exact Haiku compatibility ids win over config and historical session affinity.
+        if HAIKU_COMPATIBILITY_IDS.contains(&normalized.as_str()) {
+            return self.handlers.get("codex").cloned();
+        }
+        if is_anthropic_passthrough_model(&normalized) {
+            return self.handlers.get("anthropic").cloned();
         }
         if is_cursor_model(&normalized) {
             return self.handlers.get("cursor").cloned();
@@ -206,8 +209,16 @@ pub fn normalize_incoming_model(model: &str) -> String {
     model.to_string()
 }
 
+pub const HAIKU_COMPATIBILITY_IDS: &[&str] =
+    &["haiku", "claude-haiku-4-5", "claude-haiku-4-5-20251001"];
+
+pub fn is_anthropic_passthrough_model(model: &str) -> bool {
+    !HAIKU_COMPATIBILITY_IDS.contains(&model)
+        && (model.starts_with("claude-") || matches!(model, "sonnet" | "opus" | "fable" | "mythos"))
+}
+
 pub fn is_anthropic_alias(model: &str) -> bool {
-    ANTHROPIC_STYLE_ALIASES.contains(&model)
+    HAIKU_COMPATIBILITY_IDS.contains(&model) || is_anthropic_passthrough_model(model)
 }
 
 pub fn is_cursor_model(model: &str) -> bool {
@@ -349,23 +360,23 @@ mod tests {
     }
 
     #[test]
-    fn alias_routes_to_configured_provider() {
+    fn haiku_ignores_configured_provider() {
         let registry = Registry::new(AliasProvider::Kimi);
         let p = registry.provider_for_model("haiku", None);
-        assert!(p.is_some());
-        assert_eq!(p.expect("provider").name(), "kimi");
-    }
-
-    #[test]
-    fn opus_4_8_routes_to_configured_provider() {
-        let registry = Registry::new(AliasProvider::Codex);
-        let p = registry.provider_for_model("claude-opus-4-8", None);
         assert!(p.is_some());
         assert_eq!(p.expect("provider").name(), "codex");
     }
 
     #[test]
-    fn claude_5_aliases_route_to_configured_provider() {
+    fn opus_4_8_routes_to_anthropic() {
+        let registry = Registry::new(AliasProvider::Codex);
+        let p = registry.provider_for_model("claude-opus-4-8", None);
+        assert!(p.is_some());
+        assert_eq!(p.expect("provider").name(), "anthropic");
+    }
+
+    #[test]
+    fn claude_5_aliases_route_to_anthropic() {
         let registry = Registry::new(AliasProvider::Codex);
         for model in [
             "claude-sonnet-5",
@@ -375,7 +386,7 @@ mod tests {
         ] {
             let p = registry.provider_for_model(model, None);
             assert!(p.is_some(), "{model} should route to a provider");
-            assert_eq!(p.expect("provider").name(), "codex");
+            assert_eq!(p.expect("provider").name(), "anthropic");
         }
     }
 

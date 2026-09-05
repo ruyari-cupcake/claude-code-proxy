@@ -1456,6 +1456,80 @@ async fn dispatch_request(
         }
     };
 
+    // Inspect only the routing envelope. Never deserialize the upstream payload into our
+    // translated schema: Anthropic can introduce fields/types independently of this proxy.
+    #[derive(serde::Deserialize)]
+    struct RoutingEnvelope {
+        model: String,
+    }
+    if let Ok(envelope) = serde_json::from_slice::<RoutingEnvelope>(&body_bytes)
+        && crate::registry::is_anthropic_passthrough_model(&normalize_incoming_model(
+            &envelope.model,
+        ))
+        && let Some(provider) = state.registry.provider_for_model(&envelope.model, None)
+    {
+        let current = session::record_session_request(
+            session_id.as_deref(),
+            None,
+            provider.name(),
+            &envelope.model,
+            now,
+        );
+        if !count_tokens && let Some(session_id) = session_id.as_deref() {
+            crate::providers::codex::clear_session_compaction(session_id);
+        }
+        if let Some(monitor) = state.monitor.as_ref() {
+            if let Some(current) = current.as_ref() {
+                monitor.session_sequence_resolved(&req_id, current.seq);
+            }
+            monitor.provider_selected(&req_id, provider.name(), &envelope.model, None);
+        }
+        // Metadata only: do not capture opaque private request or upstream error bodies.
+        if let Some(capture) = create_traffic_capture(TrafficCaptureOptions {
+            req_id: req_id.clone(),
+            session_id: session_id.clone(),
+            session_seq: current.as_ref().map(|s| s.seq),
+            provider: Some(provider.name().to_string()),
+            state_dir_override: None,
+        }) {
+            if let Some(monitor) = state.monitor.as_ref() {
+                monitor.traffic_capture_path(&req_id, capture.root().to_path_buf());
+            }
+            capture.write_json(
+                "000-metadata",
+                &json!({
+                    "reqId": &req_id, "provider": provider.name(), "model": &envelope.model,
+                    "method": method.as_str(), "path": &path, "query": &query,
+                    "headers": headers_to_record(&headers),
+                }),
+            );
+        }
+        let response = provider
+            .handle_passthrough(crate::provider::PassthroughRequest {
+                path_and_query: uri
+                    .path_and_query()
+                    .map(|value| value.as_str())
+                    .unwrap_or(&path)
+                    .to_string(),
+                headers,
+                raw_body: body_bytes,
+            })
+            .await;
+        log_request_completed(
+            &log,
+            RequestLogContext {
+                req_id: &req_id,
+                provider: Some(provider.name()),
+                model: Some(&envelope.model),
+                count_tokens,
+                status: response.status(),
+                started_at,
+            },
+        );
+        // Error bodies must stream too; the translated-provider error recorder buffers them.
+        return monitor_response_body(response, request_guard);
+    }
+
     let mut body: crate::anthropic::schema::MessagesRequest = match parse_json_body(&body_bytes) {
         Ok(body) => body,
         Err(response) => {

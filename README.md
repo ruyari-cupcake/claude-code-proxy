@@ -25,6 +25,27 @@ protocol translation, streaming responses, and diagnostics. The built-in
 monitor shows sessions, active and recent requests, errors, token usage, and
 throughput.
 
+## Cupcake selective routing
+
+This fork forwards `sonnet`, `opus`, `fable`, `mythos`, and all `claude-*` model
+IDs directly to `https://api.anthropic.com`, except the exact compatibility IDs
+`haiku`, `claude-haiku-4-5`, and `claude-haiku-4-5-20251001`, which use Codex Luna.
+`claude-fable-5-1` is discoverable as **Anthropic**, never a Sol alias. Registered
+`gpt-*` IDs (including `gpt-6-astra`) and explicit Kimi/Grok/Cursor/OpenCode routes
+keep their provider paths. Alias-provider settings and session affinity cannot
+override these rules. The existing `[1m]` hint is ignored for routing, while
+Anthropic request bytes (including that hint) remain untouched.
+
+Both `/v1/messages` and `/v1/messages/count_tokens` preserve the original request
+bytes, path/query, Claude Code authentication, and streamed upstream response.
+Redirects and cross-provider fallback are disabled. The existing 16 MiB request
+limit and malformed-request errors remain in place. Anthropic traffic captures
+contain redacted metadata only, not private request or response bodies.
+
+For real Claude models, retain Claude Code's own Anthropic authentication; do not
+set `ANTHROPIC_AUTH_TOKEN=unused` (the Codex-only example below uses that placeholder).
+The proxy neither stores nor obtains Anthropic credentials.
+
 ## Quick start with Codex
 
 Install on macOS or Linux:

@@ -40,6 +40,15 @@ pub trait Provider: Send + Sync {
 
     async fn handle_count_tokens(&self, body: MessagesRequest, ctx: RequestContext) -> Response;
 
+    /// Raw transport is separate from translated generation so future Anthropic fields survive.
+    async fn handle_passthrough(&self, _request: PassthroughRequest) -> Response {
+        crate::anthropic::json_error(
+            StatusCode::NOT_IMPLEMENTED,
+            "api_error",
+            "Raw transport is unsupported",
+        )
+    }
+
     async fn generate_anthropic_stream(
         &self,
         _body: MessagesRequest,
@@ -123,4 +132,11 @@ pub struct RequestContext {
     pub provider: String,
     pub traffic: Option<Arc<TrafficCapture>>,
     pub monitor: Option<MonitorHandle>,
+}
+
+#[derive(Clone)]
+pub struct PassthroughRequest {
+    pub path_and_query: String,
+    pub headers: axum::http::HeaderMap,
+    pub raw_body: Bytes,
 }

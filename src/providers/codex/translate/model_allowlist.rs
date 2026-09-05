@@ -21,16 +21,6 @@ pub const MODEL_ALIASES: &[(&str, &str)] = &[
     ("haiku", "gpt-5.6-luna"),
     ("claude-haiku-4-5", "gpt-5.6-luna"),
     ("claude-haiku-4-5-20251001", "gpt-5.6-luna"),
-    ("sonnet", "gpt-5.6-terra"),
-    ("claude-sonnet-4-6", "gpt-5.6-terra"),
-    ("claude-sonnet-5", "gpt-5.6-terra"),
-    ("opus", "gpt-5.6-sol"),
-    ("claude-opus-4-7", "gpt-5.6-sol"),
-    ("claude-opus-4-8", "gpt-5.6-sol"),
-    ("claude-opus-5", "gpt-5.6-sol"),
-    ("fable", "gpt-5.6-sol"),
-    ("claude-fable-5", "gpt-5.6-sol"),
-    ("claude-fable-5-1", "gpt-5.6-sol"),
 ];
 
 #[derive(Debug, Clone)]
@@ -167,36 +157,25 @@ mod tests {
     }
 
     #[test]
-    fn sonnet_resolves_to_terra() {
-        let r = resolve_model_request("sonnet");
-        assert_eq!(r.model, "gpt-5.6-terra");
-    }
-
-    #[test]
-    fn sonnet_5_resolves_to_terra() {
-        let r = resolve_model_request("claude-sonnet-5");
-        assert_eq!(r.model, "gpt-5.6-terra");
-    }
-
-    #[test]
-    fn opus_resolves_to_sol() {
-        let r = resolve_model_request("opus");
-        assert_eq!(r.model, "gpt-5.6-sol");
-    }
-
-    #[test]
-    fn opus_aliases_resolve_to_sol() {
-        for model in ["claude-opus-4-8", "claude-opus-5"] {
-            let r = resolve_model_request(model);
-            assert_eq!(r.model, "gpt-5.6-sol");
-        }
-    }
-
-    #[test]
-    fn fable_5_resolves_to_sol() {
-        for model in ["fable", "claude-fable-5", "claude-fable-5-1"] {
-            let r = resolve_model_request(model);
-            assert_eq!(r.model, "gpt-5.6-sol");
+    fn non_haiku_claude_models_are_not_codex_aliases() {
+        for model in [
+            "sonnet",
+            "claude-sonnet-4-6",
+            "claude-sonnet-5",
+            "opus",
+            "claude-opus-4-7",
+            "claude-opus-4-8",
+            "claude-opus-5",
+            "fable",
+            "claude-fable-5",
+            "claude-fable-5-1",
+            "mythos",
+        ] {
+            assert_eq!(
+                resolve_model_request_with_config_override(model, false).model,
+                model
+            );
+            assert!(!is_valid_model_for_codex(model));
         }
     }
 
