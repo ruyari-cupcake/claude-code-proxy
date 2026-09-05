@@ -1452,6 +1452,7 @@ async fn models_endpoint_includes_claude_prefixed_aliases_for_discovery() {
         .collect();
     assert!(ids.iter().any(|id| id.starts_with("claude-")));
     assert!(ids.contains(&"claude-opus-5"));
+    assert!(ids.contains(&"claude-fable-5-1"));
 }
 
 #[tokio::test]

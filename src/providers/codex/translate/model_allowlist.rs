@@ -30,6 +30,7 @@ pub const MODEL_ALIASES: &[(&str, &str)] = &[
     ("claude-opus-5", "gpt-5.6-sol"),
     ("fable", "gpt-5.6-sol"),
     ("claude-fable-5", "gpt-5.6-sol"),
+    ("claude-fable-5-1", "gpt-5.6-sol"),
 ];
 
 #[derive(Debug, Clone)]
@@ -193,7 +194,7 @@ mod tests {
 
     #[test]
     fn fable_5_resolves_to_sol() {
-        for model in ["fable", "claude-fable-5"] {
+        for model in ["fable", "claude-fable-5", "claude-fable-5-1"] {
             let r = resolve_model_request(model);
             assert_eq!(r.model, "gpt-5.6-sol");
         }

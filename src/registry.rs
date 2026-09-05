@@ -22,6 +22,7 @@ pub const ANTHROPIC_STYLE_ALIASES: &[&str] = &[
     "claude-opus-5",
     "fable",
     "claude-fable-5",
+    "claude-fable-5-1",
 ];
 
 pub const CURSOR_PREFIXES: &[&str] = &["cursor:", "cursor-plan:", "cursor-ask:"];
