@@ -34,7 +34,10 @@ IDs directly to `https://api.anthropic.com`, except the exact compatibility IDs
 `gpt-*` IDs (including `gpt-6-astra`) and explicit Kimi/Grok/Cursor/OpenCode routes
 keep their provider paths. Alias-provider settings and session affinity cannot
 override these rules. The existing `[1m]` hint is ignored for routing, while
-Anthropic request bytes (including that hint) remain untouched.
+Anthropic request bytes (including that hint) remain untouched. Claude Code strips
+the hint from the payload it sends, so real traffic reaches Anthropic with the
+plain model id; a DIRECT caller must likewise send the real id in the body, because
+the passthrough never rewrites payload bytes and Anthropic rejects suffixed ids.
 
 Both `/v1/messages` and `/v1/messages/count_tokens` preserve the original request
 bytes, path/query, Claude Code authentication, and streamed upstream response.
@@ -47,6 +50,13 @@ set `ANTHROPIC_AUTH_TOKEN=unused` (the Codex-only example below uses that placeh
 The proxy neither stores nor obtains Anthropic credentials.
 
 ## Quick start with Codex
+
+> **Cupcake fork warning:** the install commands below fetch the UNPATCHED upstream
+> binary and would silently remove the selective Anthropic routing above. On the
+> cupcake workstation, always build and install from this fork instead — procedure:
+> `/home/cupcake/workspace/cupcake/_tools/claude-code-proxy/README.md`. The `docs/`
+> site in this repository likewise still describes upstream alias-provider routing;
+> where it conflicts with the Cupcake selective routing section, this README wins.
 
 Install on macOS or Linux:
 

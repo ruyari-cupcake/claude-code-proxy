@@ -231,11 +231,68 @@ async fn redirects_are_not_followed() {
 
 #[tokio::test]
 async fn sse_bytes_and_chunk_timing_are_streamed_without_buffering() {
+    assert_incremental_relay(StatusCode::OK, "text/event-stream").await;
+}
+
+#[tokio::test]
+async fn error_sse_is_streamed_without_buffering() {
+    assert_incremental_relay(StatusCode::SERVICE_UNAVAILABLE, "text/event-stream").await;
+}
+
+#[tokio::test]
+async fn chunked_json_error_relays_complete_bytes_after_bounded_buffering() {
+    // JSON error bodies are buffered (bounded) for the diagnostic, so incremental
+    // relay is not promised here; exact end-to-end bytes and termination are.
+    let body = r#"{"type":"error","error":{"type":"invalid_request_error","message":"chunked"}}"#;
+    let (first, second) = body.split_at(20);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (first, second) = (first.to_string(), second.to_string());
+    tokio::spawn(async move {
+        let svc = Router::new().route(
+            "/v1/messages",
+            post(move || {
+                let chunks = futures_util::stream::iter([
+                    Ok::<_, std::io::Error>(Bytes::from(first.clone())),
+                    Ok(Bytes::from(second.clone())),
+                ]);
+                async move {
+                    Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .header("content-type", "application/json")
+                        .body(Body::from_stream(chunks))
+                        .unwrap()
+                }
+            }),
+        );
+        axum::serve(listener, svc).await.unwrap()
+    });
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        app(Arc::new(test_registry(&url))).oneshot(request(
+            "/v1/messages",
+            "claude-fable-5-1",
+            r#"{"model":"$MODEL","messages":[]}"#,
+        )),
+    )
+    .await
+    .expect("bounded buffering must terminate")
+    .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response.into_body().collect().await.unwrap().to_bytes(),
+        body
+    );
+}
+
+async fn assert_incremental_relay(status: StatusCode, content_type: &'static str) {
     use futures_util::StreamExt;
     type Release = Arc<Mutex<Option<tokio::sync::oneshot::Receiver<()>>>>;
     const DEADLOCK_GUARD: std::time::Duration = std::time::Duration::from_secs(30);
 
-    async fn sse(State(release): State<Release>) -> Response {
+    async fn sse(
+        State((release, status, content_type)): State<(Release, StatusCode, &'static str)>,
+    ) -> Response {
         let receiver = release.lock().unwrap().take().unwrap();
         let first = futures_util::stream::once(async {
             Ok::<_, std::io::Error>(Bytes::from_static(b"data: first\n\n"))
@@ -247,8 +304,8 @@ async fn sse_bytes_and_chunk_timing_are_streamed_without_buffering() {
             Ok::<_, std::io::Error>(Bytes::from_static(b"data: second\n\n"))
         });
         Response::builder()
-            .status(StatusCode::SERVICE_UNAVAILABLE)
-            .header("content-type", "text/event-stream")
+            .status(status)
+            .header("content-type", content_type)
             .body(Body::from_stream(first.chain(second)))
             .unwrap()
     }
@@ -259,9 +316,11 @@ async fn sse_bytes_and_chunk_timing_are_streamed_without_buffering() {
     tokio::spawn(async move {
         axum::serve(
             listener,
-            Router::new()
-                .route("/v1/messages", post(sse))
-                .with_state(Arc::new(Mutex::new(Some(receiver)))),
+            Router::new().route("/v1/messages", post(sse)).with_state((
+                Arc::new(Mutex::new(Some(receiver))),
+                status,
+                content_type,
+            )),
         )
         .await
         .unwrap()
@@ -277,8 +336,8 @@ async fn sse_bytes_and_chunk_timing_are_streamed_without_buffering() {
             ))
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(response.headers()["content-type"], "text/event-stream");
+        assert_eq!(response.status(), status);
+        assert_eq!(response.headers()["content-type"], content_type);
         let mut body = response.into_body();
         let first = body.frame().await.unwrap().unwrap().into_data().unwrap();
         assert_eq!(first, "data: first\n\n");
