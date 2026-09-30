@@ -2,6 +2,7 @@ use crate::{
     anthropic::{json_error, schema::MessagesRequest},
     config::AliasProvider,
     provider::{CliHandlers, Provider, RequestContext},
+    providers::codex::translate::model_allowlist::{is_codex_model_id, strip_fast_alias},
 };
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
@@ -186,6 +187,12 @@ impl Registry {
             if models.iter().any(|candidate| candidate == &normalized) {
                 return self.handlers.get(name).cloned();
             }
+        }
+
+        // Any other explicit `gpt-*` id (or its `-fast` alias) is a Codex model the
+        // catalogue has not learned yet; Codex itself rejects an id it does not serve.
+        if is_codex_model_id(&normalized) || strip_fast_alias(&normalized).is_some() {
+            return self.handlers.get("codex").cloned();
         }
 
         None
@@ -411,6 +418,28 @@ mod tests {
         assert_eq!(
             registry
                 .provider_for_model("cursor-ask:gpt-5.5", None)
+                .unwrap()
+                .name(),
+            "cursor"
+        );
+    }
+
+    #[test]
+    fn unknown_gpt_ids_route_to_codex_without_a_catalogue_edit() {
+        let registry = Registry::new(AliasProvider::Codex);
+        for model in ["gpt-7", "gpt-7-fast", "gpt-6.2-nova", "gpt-6-luna"] {
+            assert_eq!(
+                registry.provider_for_model(model, None).unwrap().name(),
+                "codex",
+                "{model}"
+            );
+        }
+        assert!(registry.provider_for_model("gpt-", None).is_none());
+        assert!(registry.provider_for_model("o3-nova", None).is_none());
+        // Cursor-prefixed gpt ids still belong to Cursor.
+        assert_eq!(
+            registry
+                .provider_for_model("cursor:gpt-7", None)
                 .unwrap()
                 .name(),
             "cursor"

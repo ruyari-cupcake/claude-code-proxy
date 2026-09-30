@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use crate::config;
 
 use super::request::ServiceTier;
@@ -24,29 +22,51 @@ pub const MODEL_ALIASES: &[(&str, &str)] = &[
     ("claude-haiku-4-5-20251001", "gpt-5.6-luna"),
 ];
 
+/// Codex model ids the OpenAI backend serves. `ALLOWED_MODELS` is the KNOWN list used for
+/// discovery (`/v1/models`) and error messages; any other `gpt-*` id is passed through to
+/// Codex as well, so a newly released model needs no proxy rebuild — the backend rejects an
+/// id it does not know with its own 400. Cupcake patch (2026-09-30): a hard-coded catalogue
+/// meant one Rust edit + rebuild + restart per model release.
+pub const CODEX_MODEL_PREFIX: &str = "gpt-";
+
+/// Models served on the full Responses API; every other Codex id (the 5.6 family, Astra,
+/// GPT-6 / 6.1 Sol and anything newer) lives behind the Responses Lite lane.
+pub const FULL_LANE_MODELS: &[&str] = &[
+    "gpt-5.2",
+    "gpt-5.3-codex",
+    "gpt-5.3-codex-spark",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.5",
+];
+
+pub fn is_codex_model_id(model: &str) -> bool {
+    model.starts_with(CODEX_MODEL_PREFIX) && model.len() > CODEX_MODEL_PREFIX.len()
+}
+
+/// `<codex id>-fast` → `<codex id>`; `None` when the id is not a Codex priority alias.
+pub fn strip_fast_alias(model: &str) -> Option<&str> {
+    model
+        .strip_suffix("-fast")
+        .filter(|base| is_codex_model_id(base))
+}
+
 #[derive(Debug, Clone)]
 pub struct ResolvedModel {
     pub model: String,
     pub service_tier: Option<ServiceTier>,
 }
 
-fn fast_model_aliases() -> HashSet<String> {
-    ALLOWED_MODELS.iter().map(|m| format!("{m}-fast")).collect()
-}
-
 fn resolve_fast_model_alias(model: &str) -> ResolvedModel {
-    let fast_set = fast_model_aliases();
-    if fast_set.contains(model) {
-        let base = model.trim_end_matches("-fast");
-        ResolvedModel {
+    match strip_fast_alias(model) {
+        Some(base) => ResolvedModel {
             model: base.to_string(),
             service_tier: Some(ServiceTier::Priority),
-        }
-    } else {
-        ResolvedModel {
+        },
+        None => ResolvedModel {
             model: model.to_string(),
             service_tier: None,
-        }
+        },
     }
 }
 
@@ -100,7 +120,7 @@ impl std::fmt::Display for ModelNotAllowedError {
 }
 
 pub fn assert_allowed_model(model: &str) -> Result<(), ModelNotAllowedError> {
-    if ALLOWED_MODELS.contains(&model) {
+    if ALLOWED_MODELS.contains(&model) || is_codex_model_id(model) {
         Ok(())
     } else {
         Err(ModelNotAllowedError {
@@ -110,10 +130,7 @@ pub fn assert_allowed_model(model: &str) -> Result<(), ModelNotAllowedError> {
 }
 
 pub fn uses_responses_lite(model: &str) -> bool {
-    matches!(
-        model,
-        "gpt-5.6-luna" | "gpt-5.6-sol" | "gpt-5.6-terra" | "gpt-6-astra" | "gpt-6.1-sol"
-    )
+    is_codex_model_id(model) && !FULL_LANE_MODELS.contains(&model)
 }
 
 /// `gpt-5.6-luna` exists only behind the Responses Lite lane; the full
@@ -129,11 +146,10 @@ pub fn full_lane_web_search_model(model: &str) -> &str {
 }
 
 pub fn is_valid_model_for_codex(model: &str) -> bool {
-    if ALLOWED_MODELS.contains(&model) {
+    if ALLOWED_MODELS.contains(&model) || is_codex_model_id(model) {
         return true;
     }
-    let fast_set = fast_model_aliases();
-    if fast_set.contains(model) {
+    if strip_fast_alias(model).is_some() {
         return true;
     }
     MODEL_ALIASES.iter().any(|(alias, _)| *alias == model)
@@ -204,6 +220,39 @@ mod tests {
 
     #[test]
     fn not_allowed_rejected() {
-        assert!(assert_allowed_model("gpt-7").is_err());
+        for model in ["o3", "claude-opus-5", "gpt-", "gpt", "kimi-k3"] {
+            assert!(assert_allowed_model(model).is_err(), "{model}");
+            assert!(!is_valid_model_for_codex(model), "{model}");
+        }
+    }
+
+    #[test]
+    fn unknown_gpt_ids_pass_through_to_codex_on_the_lite_lane() {
+        // A model released after this build needs no catalogue edit.
+        for model in ["gpt-7", "gpt-6.2-nova", "gpt-6-luna"] {
+            assert!(assert_allowed_model(model).is_ok(), "{model}");
+            assert!(is_valid_model_for_codex(model), "{model}");
+            assert!(uses_responses_lite(model), "{model}");
+            let fast = format!("{model}-fast");
+            assert!(is_valid_model_for_codex(&fast), "{fast}");
+            let r = resolve_model_request(&fast);
+            assert_eq!(r.model, model);
+            assert_eq!(r.service_tier, Some(ServiceTier::Priority));
+        }
+        // Known full-lane ids keep the full Responses API.
+        for model in FULL_LANE_MODELS {
+            assert!(!uses_responses_lite(model), "{model}");
+        }
+        for model in [
+            "gpt-5.6-luna",
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-6-astra",
+        ] {
+            assert!(uses_responses_lite(model), "{model}");
+        }
+        // `-fast` on a non-Codex id is not an alias.
+        assert_eq!(strip_fast_alias("claude-opus-5-fast"), None);
+        assert_eq!(strip_fast_alias("gpt-6.1-sol-fast"), Some("gpt-6.1-sol"));
     }
 }

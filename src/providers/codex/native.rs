@@ -20,7 +20,7 @@ use crate::traffic::{
 use super::client::{CodexError, CodexHttpClient};
 use super::translate::model_allowlist::{
     ALLOWED_MODELS, MODEL_ALIASES, assert_allowed_model, full_lane_web_search_model,
-    uses_responses_lite,
+    strip_fast_alias, uses_responses_lite,
 };
 
 pub struct CodexNativeBackend {
@@ -140,9 +140,9 @@ fn shape_native_request(body: &mut Value) -> Result<NativeResolved, Response> {
 }
 
 fn resolve_native_model(requested: &str) -> (String, bool) {
-    let (requested, priority) = match requested.strip_suffix("-fast") {
-        Some(base) if ALLOWED_MODELS.contains(&base) => (base, true),
-        _ => (requested, false),
+    let (requested, priority) = match strip_fast_alias(requested) {
+        Some(base) => (base, true),
+        None => (requested, false),
     };
     let model = MODEL_ALIASES
         .iter()
